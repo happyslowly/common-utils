@@ -6,54 +6,67 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
-public class InputData implements Iterable<Map<String, Object>> {
-    private String inputFile;
-    private InputDataIterator iterator;
-    private String delimiter;
+public class FlatFile implements Iterable<Map<String, Object>>, AutoCloseable {
+    private final String inputFile;
+    private FlatFileIterator iterator;
+    private final String delimiter;
 
-    public InputData(String inputFile, String delimiter) throws IOException {
+    private boolean emptyValuesIgnored = true;
+    private boolean nullValuesIgnored = false;
+    private static final String NULL = "NULL";
+    private static final String EMPTY = "";
+
+    public FlatFile(String inputFile, String delimiter) throws IOException {
         this.inputFile = inputFile;
         this.delimiter = delimiter;
     }
 
-    public InputData(String inputFile) throws IOException {
+    public FlatFile(String inputFile) throws IOException {
         this(inputFile, "\\|");
+    }
+
+    public void setEmptyValuesIgnored(boolean flag) {
+        this.emptyValuesIgnored = flag;
+    }
+
+    public void setNullValuesIgnored(boolean flag) {
+        this.nullValuesIgnored = flag;
     }
 
     @Override
     public Iterator<Map<String, Object>> iterator() {
-        iterator = new InputDataIterator(inputFile);
-        return iterator;
+        try {
+            iterator = new FlatFileIterator(inputFile);
+            return iterator;
+        } catch (IOException e) {
+            throw new IllegalArgumentException(e);
+        }
     }
 
-    public class InputDataIterator implements Iterator<Map<String, Object>> {
+    public class FlatFileIterator implements Iterator<Map<String, Object>> {
         private String nextLine;
         private boolean finished = false;
         private BufferedReader reader;
         private String[] header;
 
+        private static final String GZ_SUFFIX = ".gz";
 
-        public InputDataIterator(String inputFile) {
-            try {
-                open(inputFile);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+        public FlatFileIterator(String inputFile) throws IOException {
+            open(inputFile);
         }
 
-        private void open(String unitTestFile) throws IOException {
-            if (unitTestFile.endsWith(".gz")) {
-                reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(new FileInputStream(unitTestFile))));
+        private void open(String inputFile) throws IOException {
+            if (inputFile.endsWith(GZ_SUFFIX)) {
+                reader = new BufferedReader(new InputStreamReader(new GZIPInputStream(new FileInputStream(inputFile))));
             } else {
-                reader = new BufferedReader(new FileReader(unitTestFile));
+                reader = new BufferedReader(new FileReader(inputFile));
             }
             String headerLine = reader.readLine();
             if (headerLine == null) {
-                throw new IOException("Empty file: " + unitTestFile);
+                throw new IOException("Empty file: " + inputFile);
             } else {
                 header = headerLine.split(delimiter);
             }
-
         }
 
         @Override
@@ -74,10 +87,8 @@ public class InputData implements Iterable<Map<String, Object>> {
                     }
                 }
             } catch (IOException e) {
-                e.printStackTrace();
+                throw new RuntimeException(e);
             }
-
-            return false;
         }
 
         @Override
@@ -88,8 +99,13 @@ public class InputData implements Iterable<Map<String, Object>> {
             String[] data = nextLine.split(delimiter, -1);
             Map<String, Object> variableMap = new LinkedHashMap<String, Object>();
             for (int i = 0; i < header.length; i++) {
-                if (!data[i].trim().equals(""))
-                    variableMap.put(header[i], data[i]);
+                if (emptyValuesIgnored && data[i].trim().equals(EMPTY)) {
+                    continue;
+                }
+                if (nullValuesIgnored && data[i].trim().equalsIgnoreCase(NULL)) {
+                    continue;
+                }
+                variableMap.put(header[i], data[i]);
             }
             nextLine = null;
             return variableMap;
@@ -100,18 +116,15 @@ public class InputData implements Iterable<Map<String, Object>> {
             throw new UnsupportedOperationException();
         }
 
-        public void close() {
+        public void close() throws IOException {
             if (reader != null) {
-                try {
-                    reader.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                reader.close();
             }
         }
     }
 
-    public void close() {
+    @Override
+    public void close() throws Exception {
         if (iterator != null) {
             iterator.close();
         }
